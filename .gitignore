@@ -65,7 +65,8 @@ target/
 # Rep Ignores
 .vscode/
 
-data/
+data/*
+!data/annotations/
 cache-directory/
 
 poetry.lock
