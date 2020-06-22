@@ -111,7 +111,7 @@ parser.add_argument(
 parser.add_argument(
     "--reload_all",
     action="store_true",
-    default=True,
+    default=False,
     help="Reloads the cached/preprocessed dataset, the labels",
 )
 parser.add_argument(
@@ -151,6 +151,7 @@ args = parser.parse_args()
 ################## PARAMETERS ###################
 #################################################
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+print("device: ", device)
 data_path = Path(args.path)
 label_filename = "annotations.csv"
 tmp_dir = Path(args.tmp_dir)
@@ -158,7 +159,7 @@ os.makedirs(tmp_dir, exist_ok=True)
 
 
 if args.classifier == "wind":
-    prefix = "timeseries_derived_data_products"
+    prefix = "seismic_data/4D/"
 else:
     raise RuntimeError("Please specify either `wind` or `tbd (not implemented yet)` classifier")
 
@@ -192,7 +193,7 @@ if not args.local:
     )
 else:
     store = stuett.DirectoryStore(Path(data_path).joinpath(prefix))
-    if ("MH25_vaisalawxt520windpth_2017.csv" not in store):
+    if ("MH36/2017/EHE.D/4D.MH36.A.EHE.D.20170101_000000.miniseed" not in store):
         raise RuntimeError(
             f"Please provide a valid path to the permafrost {prefix} data or see README how to download it"
         )
@@ -208,12 +209,35 @@ def get_wind_transform():
     
     return None
 
+def get_seismic_transform():
+    #obspy.detrend?
+    def to_db(x, min_value=1e-10, reference=1.0):
+        value_db = 10.0 * xr.ufuncs.log10(xr.ufuncs.maximum(min_value, x))
+        value_db -= 10.0 * xr.ufuncs.log10(xr.ufuncs.maximum(min_value, reference))
+        return value_db
+
+    spectrogram = stuett.data.Spectrogram(
+        nfft=512, stride=512, dim="time", sampling_rate=1000
+    )
+
+    transform = transforms.Compose(
+        [
+            lambda x: x / x.max(),  # rescale to -1 to 1
+            spectrogram,  # spectrogram
+            lambda x: to_db(x).values.squeeze(),
+            lambda x: Tensor(x),
+        ]
+    )
+
+    return transform
+
 ########## Annotation Balancing #################
 #################################################
 # Load the labels
 label = stuett.data.BoundingBoxAnnotation(
     filename=label_filename, store=annotation_store
 )()
+print(label)
 # we are not interest in any x or y position (since there are none in the labels)
 label = label.drop_vars(["start_x", "end_x", "start_y", "end_y"])
 
@@ -223,19 +247,19 @@ label = label.drop_vars(["start_x", "end_x", "start_y", "end_y"])
 # Here, we balance it by choosing number of random non-mountaineer sections which
 # is approximatly the same number as the mountaineer sections.
 # NOTE: Adjust this section if you want to train with different label classes!!
-no_label_mask = label.isnull()
-label_mask = label.notnull()
-ratio = (no_label_mask.sum() / label_mask.sum()).values.astype(int)
-no_label_indices = np.argwhere(no_label_mask.values)[::ratio].squeeze()
-label_mask[no_label_indices] = True
-label = label[label_mask]
+#no_label_mask = label.isnull()
+#label_mask = label.notnull()
+#ratio = (no_label_mask.sum() / label_mask.sum()).values.astype(int)
+#no_label_indices = np.argwhere(no_label_mask.values)[::ratio].squeeze()
+#label_mask[no_label_indices] = True
+#label = label[label_mask]
 print("Number of labels which are checked against the data: ", len(label))
 
 # here we load a predefined list from our server
 # If you want to regenerate your list add reload_all as an argument to the script
 label_list_file = tmp_dir.joinpath(f"{args.classifier}_list.csv").resolve()
 if not label_list_file.exists() and not args.reload_all:
-    # load from server
+    # save in store
     with open(label_list_file, "wb") as f:
         f.write(annotation_store[f"{args.classifier}_list.csv"])
 
@@ -243,15 +267,27 @@ if not label_list_file.exists() and not args.reload_all:
 ###### SELECTING A CLASSIFIER TYPE ##############
 #################################################
 # Load the data source
+def load_seismic_source():
+    seismic_channels = ["EHE", "EHN", "EHZ"]
+    seismic_node = stuett.data.SeismicSource(
+        store=store, station="MH36", channel=seismic_channels,
+    )
+    return seismic_node, len(seismic_channels)
+
 def load_wind_source():
-    wind_node = stuett.data.CsvSource(store=store, filename="MH25_vaisalawxt520windpth_2017.csv")
+    wind_node = stuett.data.CsvSource(store=store, filename="MH25_vaisalawxt520windpth_2017.csv", )
     return wind_node, 3
 
-if args.classifier == "wind":
-    from datasets import WindDataset as Dataset
+if args.classifier == "tbd":
+    #from datasets import WindDataset as Dataset -> seismic datenset
 
     transform = None
     data_node, num_channels = load_wind_source()
+elif args.classifier == "wind":
+    from datasets import SeismicDataset as Dataset
+
+    transform = get_seismic_transform()
+    data_node, num_channels = load_seismic_source()
 
 
 ############# LOADING DATASET ###################
@@ -265,7 +301,7 @@ train_dataset = Dataset(
     mode="train",
     label=label,
     data=data_node,
-    dataset_slice={"time": slice("2017-01-01", "2017-01-02")},
+    dataset_slice={"time": slice("2017-01-01", "2017-12-31")},
     batch_dims={"time": stuett.to_timedelta(60, "minutes")},
 )
 print("Using cached training data: ", args.use_frozen)

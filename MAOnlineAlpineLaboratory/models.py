@@ -8,19 +8,19 @@ class SimpleCNN(nn.Module):
 
         self.num_targets = num_targets
         self.main = nn.Sequential(
-            nn.Conv2d(32, 4, 2, 1, bias=False),
+            nn.Conv2d(num_channels, 32, 4, 2, 1, bias=False),
             nn.BatchNorm2d(32),
             nn.ReLU(True),
-            nn.Conv2d(32, 4, 2, 1, bias=False),
+            nn.Conv2d(32, 32, 4, 2, 1, bias=False),
             nn.BatchNorm2d(32),
             nn.ReLU(True),
-            nn.Conv2d(32, 4, 2, 1, bias=False),
+            nn.Conv2d(32, 32, 4, 2, 1, bias=False),
             nn.BatchNorm2d(32),
             nn.ReLU(True),
-            nn.Conv2d(32, 4, 2, 1, bias=False),
+            nn.Conv2d(32, 32, 4, 2, 1, bias=False),
             nn.BatchNorm2d(32),
             nn.ReLU(True),
-            nn.Conv2d(num_targets, 4, 1, 0, bias=False),
+            nn.Conv2d(32, num_targets, 4, 1, 0, bias=False),
             nn.BatchNorm2d(num_targets),
         )
         self.average_pooling = nn.AdaptiveAvgPool2d(1)

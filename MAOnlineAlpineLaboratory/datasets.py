@@ -145,6 +145,38 @@ class PytorchDataset(stuett.data.SegmentedDataset):
     def __len__(self):
         return len(self.label)
 
+class SeismicDataset(PytorchDataset):
+    def __getitem__(self, idx):
+
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+
+        label_info = self.label.iloc[idx]
+        indexers = label_info["indexers"]
+        label = label_info["labels"]
+
+        target = np.zeros((len(self.classes),))
+        for l in label:
+            if pd.notnull(l):
+                target[self.classes[l]] = 1
+
+        #        print(label_info)
+
+        # print(indexers['time'])
+        data = self.get_data(indexers)
+
+        if self.transform is not None:
+            data = self.transform(data)
+
+        if "shape" not in self.__dict__:
+            self.shape = data.shape
+        elif data.shape != self.shape:
+            warnings.warn(f"Inconsistency in the data for item {indexers['time']}, its shape {data.shape} does not match shape {self.shape}")
+            padded_data = torch.zeros(self.shape)
+            pad = data.shape - self.shape
+            padded_data = torch.nn.functional.pad(data,pad)
+        print (data.shape)
+        return data, target
 
 class WindDataset(PytorchDataset):
     def __getitem__(self, idx):
@@ -162,8 +194,9 @@ class WindDataset(PytorchDataset):
 
         print("indexers:", indexers)
         data = self.get_data(indexers)
+        data = data.loc["2017-01-01":"2017-12-31", "wind_speed_average"]
         print("data xarray: ", data)
-        data = data.drop_vars(["position []", "wind_direction_minimum [°]", "wind_direction_average [°]", "wind_direction_maximum [°]", "temp_air [°C]", "temp_internal [°C]", "relative_humidity [%RH]", "air_pressure [hPa]"])
+        #data = data.drop_vars(["position []", "wind_direction_minimum [°]", "wind_direction_average [°]", "wind_direction_maximum [°]", "temp_air [°C]", "temp_internal [°C]", "relative_humidity [%RH]", "air_pressure [hPa]"])
         print("data xarray: ", data)
         data = data.values
         data = np.expand_dims(data, axis=2)
