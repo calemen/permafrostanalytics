@@ -173,12 +173,12 @@ class SeismicDataset(PytorchDataset):
         elif data.shape != self.shape:
             warnings.warn(f"Inconsistency in the data for item {indexers['time']}, its shape {data.shape} does not match shape {self.shape}")
             padded_data = torch.zeros(self.shape)
-            pad = data.shape - self.shape
+            pad = (0 ,abs(list(self.shape)[-1] - list(data.shape)[-1]))
             padded_data = torch.nn.functional.pad(data,pad)
-        print (data.shape)
+            return padded_data, target
         return data, target
 
-class WindDataset(PytorchDataset):
+class ImageDataset(PytorchDataset):
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()
@@ -192,15 +192,17 @@ class WindDataset(PytorchDataset):
             if pd.notnull(l):
                 target[self.classes[str(l)]] = 1
 
-        print("indexers:", indexers)
-        data = self.get_data(indexers)
-        data = data.loc["2017-01-01":"2017-12-31", "wind_speed_average"]
-        print("data xarray: ", data)
-        #data = data.drop_vars(["position []", "wind_direction_minimum [°]", "wind_direction_average [°]", "wind_direction_maximum [°]", "temp_air [°C]", "temp_internal [°C]", "relative_humidity [%RH]", "air_pressure [hPa]"])
-        print("data xarray: ", data)
-        data = data.values
-        data = np.expand_dims(data, axis=2)
-        print("data: ", data)
+        filenames = self.get_data(indexers)
+        # print(filenames)
+        if filenames.size > 1:
+            key = str(filenames.squeeze().values[0])
+        else:
+            key = str(filenames.squeeze().values)
+
+        # print(key)
+        img = Image.open(io.BytesIO(self.store[key]))
+        data = np.array(img.convert("RGB")).transpose([2, 0, 1])
+        data = data.astype(np.float32)
 
         if self.transform is not None:
             data = self.transform(data)

@@ -30,7 +30,7 @@ import os
 import pandas as pd
 import xarray as xr
 
-from datasets import WindDataset, DatasetFreezer, DatasetMerger
+from datasets import DatasetFreezer, DatasetMerger
 from torchvision import transforms
 from torch.utils.data import DataLoader
 from torch import Tensor
@@ -47,6 +47,7 @@ import plotly.graph_objs as go
 
 import stuett
 from stuett.global_config import get_setting, setting_exists, set_setting
+from stuett.data import Freezer
 
 import argparse
 import torch
@@ -76,7 +77,7 @@ parser.add_argument(
     "--classifier",
     type=str,
     default="wind",
-    help="Classification type either `wind` or `tbd (not implemented yet)`",
+    help="Classification type either 'seismic', 'image' or 'wind'",
 )
 parser.add_argument(
     "--batch_size",
@@ -136,7 +137,7 @@ parser.add_argument(
     "-p",
     "--path",
     type=str,
-    default=str(Path(__file__).absolute().parent.joinpath("..", "data/")),
+    default=str(Path(__file__).absolute().parent.joinpath("..", "data")),
     help="The path to the folder containing the permafrost hackathon data",
 )
 parser.add_argument(
@@ -158,10 +159,12 @@ tmp_dir = Path(args.tmp_dir)
 os.makedirs(tmp_dir, exist_ok=True)
 
 
-if args.classifier == "wind":
+if args.classifier == "wind" or args.classifier == "seismic":
     prefix = "seismic_data/4D/"
+elif args.classifier == "image":
+    prefix="timelapse_images_fast"
 else:
-    raise RuntimeError("Please specify either `wind` or `tbd (not implemented yet)` classifier")
+    raise RuntimeError("Please specify either 'seismic', 'image' or 'wind' classifier")
 
 if args.reload_all:
     args.reload_frozen = True
@@ -194,9 +197,7 @@ if not args.local:
 else:
     store = stuett.DirectoryStore(Path(data_path).joinpath(prefix))
     if ("MH36/2017/EHE.D/4D.MH36.A.EHE.D.20170101_000000.miniseed" not in store):
-        raise RuntimeError(
-            f"Please provide a valid path to the permafrost {prefix} data or see README how to download it"
-        )
+        raise RuntimeError(f"Please provide a valid path to the permafrost {prefix} data or see README how to download it")
     annotation_store = stuett.DirectoryStore(Path(data_path).joinpath("annotations"))
     if label_filename not in annotation_store:
         print(
@@ -205,10 +206,6 @@ else:
 
 ################## Transform ################
 #################################################
-def get_wind_transform():
-    
-    return None
-
 def get_seismic_transform():
     #obspy.detrend?
     def to_db(x, min_value=1e-10, reference=1.0):
@@ -231,13 +228,23 @@ def get_seismic_transform():
 
     return transform
 
+def get_image_transform():
+    # TODO: add image transformations
+    normalize = transforms.Normalize(
+        mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+    )
+
+    transform = transforms.Compose([transforms.ToTensor(), normalize])
+
+    return transform
+
 ########## Annotation Balancing #################
 #################################################
 # Load the labels
 label = stuett.data.BoundingBoxAnnotation(
     filename=label_filename, store=annotation_store
 )()
-print(label)
+#print(label)
 # we are not interest in any x or y position (since there are none in the labels)
 label = label.drop_vars(["start_x", "end_x", "start_y", "end_y"])
 
@@ -274,16 +281,19 @@ def load_seismic_source():
     )
     return seismic_node, len(seismic_channels)
 
-def load_wind_source():
-    wind_node = stuett.data.CsvSource(store=store, filename="MH25_vaisalawxt520windpth_2017.csv", )
-    return wind_node, 3
+def load_image_source():
+    image_node = stuett.data.MHDSLRFilenames(
+        store=store, force_write_to_remote=True, as_pandas=False,
+    )
+    return image_node, 3
 
-if args.classifier == "tbd":
-    #from datasets import WindDataset as Dataset -> seismic datenset
+
+if args.classifier == "image":
+    from datasets import ImageDataset as Dataset
 
     transform = None
-    data_node, num_channels = load_wind_source()
-elif args.classifier == "wind":
+    data_node, num_channels = load_image_source()
+elif args.classifier == "wind" or args.classifier == "seismic":
     from datasets import SeismicDataset as Dataset
 
     transform = get_seismic_transform()
@@ -293,22 +303,42 @@ elif args.classifier == "wind":
 ############# LOADING DATASET ###################
 #################################################
 bypass_freeze = not args.use_frozen
+
+if args.classifier == "image" or args.classifier == "seismic":
+    dataset_slice = {"time": slice("2017-01-01", "2017-12-31")}
+    batch_dims = {"time": stuett.to_timedelta(10, "minutes")}
+elif args.classifier == "wind":
+    dataset_slice={"time": slice("2017-01-01", "2017-12-31")}
+    batch_dims={"time": stuett.to_timedelta(60, "minutes")}
+
+# seismic_channels = ["EHE", "EHN", "EHZ"]
+# seismic_data_node = stuett.data.SeismicSource(store=store, station="MH36", channel=seismic_channels, start_time="2017-08-01", end_time="2017-09-01")
+# seismic_data = seismic_data_node()
+# print(seismic_data)
+
 print("Setting up training dataset")
+
+if args.use_frozen:
+    freezer_node = Freezer(store=store, groupname="test", dim="time", offset=0)
+    freezer_node = freezer_node(data_node(delayed=True))
+
 train_dataset = Dataset(
     label_list_file=label_list_file,
     transform=transform,
     store=store,
     mode="train",
     label=label,
-    data=data_node,
-    dataset_slice={"time": slice("2017-01-01", "2017-12-31")},
-    batch_dims={"time": stuett.to_timedelta(60, "minutes")},
+    data=freezer_node,
+    dataset_slice=dataset_slice,
+    batch_dims=batch_dims,
 )
 print("Using cached training data: ", args.use_frozen)
-train_frozen = DatasetFreezer(
-    train_dataset, path=tmp_dir.joinpath("frozen", "train"), bypass=bypass_freeze
-)
-train_frozen.freeze(reload=args.reload_frozen)
+#train_frozen = DatasetFreezer(
+#    train_dataset, path=tmp_dir.joinpath("frozen", "train"), bypass=bypass_freeze
+#)
+#train_frozen.freeze(reload=args.reload_frozen)
+
+train_frozen = train_dataset
 
 print("Setting up test dataset")
 train_dataset = Dataset(
@@ -318,8 +348,8 @@ train_dataset = Dataset(
     mode="test",
     label=label,
     data=data_node,
-    dataset_slice={"time": slice("2017-01-01", "2017-12-31")},
-    batch_dims={"time": stuett.to_timedelta(60, "minutes")},
+    dataset_slice=dataset_slice,
+    batch_dims=batch_dims,
 )
 print("Using cached test data: ", args.use_frozen)
 test_frozen = DatasetFreezer(
@@ -336,7 +366,7 @@ train_loader = DataLoader(
     shuffle=shuffle,
     sampler=train_sampler,
     # drop_last=True,
-    num_workers=0,
+    num_workers=1,
 )
 
 validation_sampler = None
@@ -346,7 +376,7 @@ test_loader = DataLoader(
     shuffle=shuffle,
     sampler=validation_sampler,
     # drop_last=True,
-    num_workers=0,
+    num_workers=1,
 )
 
 def train(epoch, model, train_loader, writer):

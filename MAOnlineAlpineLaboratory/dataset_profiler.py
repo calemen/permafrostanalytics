@@ -30,7 +30,7 @@ import os
 import pandas as pd
 import xarray as xr
 
-from datasets import SeismicDataset, DatasetFreezer, DatasetMerger
+from datasets import DatasetFreezer, DatasetMerger
 from torchvision import transforms
 from torch.utils.data import DataLoader
 from torch import Tensor
@@ -77,8 +77,8 @@ parser = argparse.ArgumentParser(description="Pytorch Neural Network Classificat
 parser.add_argument(
     "--classifier",
     type=str,
-    default="image",
-    help="Classification type either `image` or `seismic`",
+    default="wind",
+    help="Classification type either 'seismic', 'image' or 'wind'",
 )
 parser.add_argument(
     "--batch_size",
@@ -125,7 +125,7 @@ parser.add_argument(
 parser.add_argument(
     "--tmp_dir",
     default=str(
-        Path(__file__).absolute().parent.joinpath("..", "..", "data", "user_dir", "tmp")
+        Path(__file__).absolute().parent.joinpath("..", "data", "user_dir", "tmp")
     ),
     help="folder to store logs and model checkpoints",
 )
@@ -138,13 +138,14 @@ parser.add_argument(
     "-p",
     "--path",
     type=str,
-    default=str(Path(__file__).absolute().parent.joinpath("..", "..", "data/")),
+    default=str(Path(__file__).absolute().parent.joinpath("..", "data")),
     help="The path to the folder containing the permafrost hackathon data",
 )
 parser.add_argument(
     "-l",
     "--local",
     action="store_true",
+    default=True,
     help="Only use local files and not data from Azure",
 )
 args = parser.parse_args()
@@ -152,18 +153,19 @@ args = parser.parse_args()
 ################## PARAMETERS ###################
 #################################################
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+print("device: ", device)
 data_path = Path(args.path)
-label_filename = "automatic_labels_mountaineers.csv"
+label_filename = "annotations.csv"
 tmp_dir = Path(args.tmp_dir)
 os.makedirs(tmp_dir, exist_ok=True)
 
 
-if args.classifier == "image":
-    prefix = "timelapse_images_fast"
-elif args.classifier == "seismic":
+if args.classifier == "wind" or args.classifier == "seismic":
     prefix = "seismic_data/4D/"
+elif args.classifier == "image":
+    prefix="timelapse_images_fast"
 else:
-    raise RuntimeError("Please specify either `image` or `seismic` classifier")
+    raise RuntimeError("Please specify either 'seismic', 'image' or 'wind' classifier")
 
 if args.reload_all:
     args.reload_frozen = True
@@ -195,23 +197,18 @@ if not args.local:
     )
 else:
     store = stuett.DirectoryStore(Path(data_path).joinpath(prefix))
-    if (
-        "2017-01-01/20170101_080018.JPG" not in store
-        and "MH36/2017/EHE.D/4D.MH36.A.EHE.D.20171231_230000.miniseed" not in store
-    ):
-        raise RuntimeError(
-            f"Please provide a valid path to the permafrost {prefix} data or see README how to download it"
-        )
+    if ("MH36/2017/EHE.D/4D.MH36.A.EHE.D.20170101_000000.miniseed" not in store):
+        raise RuntimeError(f"Please provide a valid path to the permafrost {prefix} data or see README how to download it")
     annotation_store = stuett.DirectoryStore(Path(data_path).joinpath("annotations"))
     if label_filename not in annotation_store:
         print(
             "WARNING: Please provide a valid path to the permafrost annotation data or see README how to download it"
         )
 
-
-################## START OF IDEA ################
+################## Transform ################
 #################################################
 def get_seismic_transform():
+    #obspy.detrend?
     def to_db(x, min_value=1e-10, reference=1.0):
         value_db = 10.0 * xr.ufuncs.log10(xr.ufuncs.maximum(min_value, x))
         value_db -= 10.0 * xr.ufuncs.log10(xr.ufuncs.maximum(min_value, reference))
@@ -232,7 +229,6 @@ def get_seismic_transform():
 
     return transform
 
-
 def get_image_transform():
     # TODO: add image transformations
     normalize = transforms.Normalize(
@@ -243,13 +239,13 @@ def get_image_transform():
 
     return transform
 
-
 ########## Annotation Balancing #################
 #################################################
 # Load the labels
 label = stuett.data.BoundingBoxAnnotation(
     filename=label_filename, store=annotation_store
 )()
+#print(label)
 # we are not interest in any x or y position (since there are none in the labels)
 label = label.drop_vars(["start_x", "end_x", "start_y", "end_y"])
 
@@ -259,19 +255,19 @@ label = label.drop_vars(["start_x", "end_x", "start_y", "end_y"])
 # Here, we balance it by choosing number of random non-mountaineer sections which
 # is approximatly the same number as the mountaineer sections.
 # NOTE: Adjust this section if you want to train with different label classes!!
-no_label_mask = label.isnull()
-label_mask = label.notnull()
-ratio = (no_label_mask.sum() / label_mask.sum()).values.astype(int)
-no_label_indices = np.argwhere(no_label_mask.values)[::ratio].squeeze()
-label_mask[no_label_indices] = True
-label = label[label_mask]
-print("Number of labels which are checked against the data", len(label))
+#no_label_mask = label.isnull()
+#label_mask = label.notnull()
+#ratio = (no_label_mask.sum() / label_mask.sum()).values.astype(int)
+#no_label_indices = np.argwhere(no_label_mask.values)[::ratio].squeeze()
+#label_mask[no_label_indices] = True
+#label = label[label_mask]
+print("Number of labels which are checked against the data: ", len(label))
 
 # here we load a predefined list from our server
 # If you want to regenerate your list add reload_all as an argument to the script
 label_list_file = tmp_dir.joinpath(f"{args.classifier}_list.csv").resolve()
 if not label_list_file.exists() and not args.reload_all:
-    # load from server
+    # save in store
     with open(label_list_file, "wb") as f:
         f.write(annotation_store[f"{args.classifier}_list.csv"])
 
@@ -286,7 +282,6 @@ def load_seismic_source():
     )
     return seismic_node, len(seismic_channels)
 
-
 def load_image_source():
     image_node = stuett.data.MHDSLRFilenames(
         store=store, force_write_to_remote=True, as_pandas=False,
@@ -294,89 +289,107 @@ def load_image_source():
     return image_node, 3
 
 
+if args.classifier == "image":
+    from datasets import ImageDataset as Dataset
 
-from datasets import ImageDataset
+    transform = None
+    data_node, num_channels = load_image_source()
+elif args.classifier == "wind" or args.classifier == "seismic":
+    from datasets import SeismicDataset as Dataset
 
-transform = None
-data_node, num_channels = load_image_source()
+    transform = get_seismic_transform()
+    data_node, num_channels = load_seismic_source()
 
 
 ############# LOADING DATASET ###################
 #################################################
 bypass_freeze = not args.use_frozen
-print("Setting up training dataset")
 
-profiler = Profiler()
-profiler.start()
+if args.classifier == "image" or args.classifier == "seismic":
+    dataset_slice = {"time": slice("2017-01-01", "2017-12-31")}
+    batch_dims = {"time": stuett.to_timedelta(10, "minutes")}
+elif args.classifier == "wind":
+    dataset_slice={"time": slice("2017-01-01", "2017-12-31")}
+    batch_dims={"time": stuett.to_timedelta(60, "minutes")}
 
-train_dataset = ImageDataset(
-    label_list_file=label_list_file,
-    transform=transform,
-    store=store,
-    mode="train",
-    label=label,
-    data=data_node,
-    dataset_slice={"time": slice("2017-01-01", "2017-12-31")},
-    batch_dims={"time": stuett.to_timedelta(10, "minutes")},
-)
+#profiler = Profiler()
+#profiler.start()
 
-profiler.stop()
+for use_frozen in [True]:
 
-print(profiler.output_text(unicode=True, color=True))
+    bypass_freeze = not use_frozen
 
-profiler.start()
+    print("Profiler start for TRAIN dataset; using cached data: ", use_frozen)
 
-train_dataset = ImageDataset(
-    label_list_file=label_list_file,
-    transform=transform,
-    store=store,
-    mode="test",
-    label=label,
-    data=data_node,
-    dataset_slice={"time": slice("2017-01-01", "2017-12-31")},
-    batch_dims={"time": stuett.to_timedelta(10, "minutes")},
-)
+    train_dataset = Dataset(
+        label_list_file=label_list_file,
+        transform=transform,
+        store=store,
+        mode="train",
+        label=label,
+        data=data_node,
+        dataset_slice={"time": slice("2017-01-01", "2017-12-31")},
+        batch_dims={"time": stuett.to_timedelta(10, "minutes")},
+    )
 
-profiler.stop()
+    train_frozen = DatasetFreezer(
+        train_dataset, path=tmp_dir.joinpath("frozen", "train"), bypass=bypass_freeze
+    )
+    train_frozen.freeze(reload=args.reload_frozen)
 
-print(profiler.output_text(unicode=True, color=True))
+    # Set up pytorch data loaders
+    shuffle = True
+    train_sampler = None
+    train_loader = DataLoader(
+        train_frozen,
+        batch_size=args.batch_size,
+        shuffle=shuffle,
+        sampler=train_sampler,
+        # drop_last=True,
+        num_workers=1,
+    )
 
-from datasets import SeismicDataset
+    for i, data in enumerate(tqdm(train_frozen), 0):
+        if i > 1000:
+            break
+        else:
+            pass
 
-transform = get_seismic_transform()
-data_node, num_channels = load_seismic_source()
 
-profiler = Profiler()
-profiler.start()
+    print("Profiler start for TEST dataset; using cached data: ", use_frozen)
 
-train_dataset = SeismicDataset(
-    label_list_file=label_list_file,
-    transform=transform,
-    store=store,
-    mode="train",
-    label=label,
-    data=data_node,
-    dataset_slice={"time": slice("2017-01-01", "2017-12-31")},
-    batch_dims={"time": stuett.to_timedelta(10, "minutes")},
-)
+    test_dataset = Dataset(
+        label_list_file=label_list_file,
+        transform=transform,
+        store=store,
+        mode="test",
+        label=label,
+        data=data_node,
+        dataset_slice={"time": slice("2017-01-01", "2017-12-31")},
+        batch_dims={"time": stuett.to_timedelta(10, "minutes")},
+    )
 
-profiler.stop()
+    test_frozen = DatasetFreezer(
+        test_dataset, path=tmp_dir.joinpath("frozen", "test"), bypass=bypass_freeze
+    )
+    test_frozen.freeze(reload=args.reload_frozen)
 
-print(profiler.output_text(unicode=True, color=True))
+    validation_sampler = None
+    test_loader = DataLoader(
+        test_frozen,
+        batch_size=args.batch_size,
+        shuffle=shuffle,
+        sampler=validation_sampler,
+        # drop_last=True,
+        num_workers=1,
+    )
 
-profiler.start()
+    for i, data in enumerate(tqdm(test_frozen), 0):
+        if i > 1000:
+            break
+        else:
+            pass
 
-train_dataset = SeismicDataset(
-    label_list_file=label_list_file,
-    transform=transform,
-    store=store,
-    mode="test",
-    label=label,
-    data=data_node,
-    dataset_slice={"time": slice("2017-01-01", "2017-12-31")},
-    batch_dims={"time": stuett.to_timedelta(10, "minutes")},
-)
+#profiler.stop()
 
-profiler.stop()
-
-print(profiler.output_text(unicode=True, color=True))
+#print(profiler.output_text(unicode=True, color=True, timeline=True))
