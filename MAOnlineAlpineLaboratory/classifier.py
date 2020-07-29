@@ -277,7 +277,7 @@ if not label_list_file.exists() and not args.reload_all:
 def load_seismic_source():
     seismic_channels = ["EHE", "EHN", "EHZ"]
     seismic_node = stuett.data.SeismicSource(
-        store=store, station="MH36", channel=seismic_channels,
+        store=store, station="MH36", channel=seismic_channels, start_time="2017-01-01", end_time="2017-12-31"
     )
     return seismic_node, len(seismic_channels)
 
@@ -320,7 +320,7 @@ print("Setting up training dataset")
 
 if args.use_frozen:
     freezer_node = Freezer(store=store, groupname="test", dim="time", offset=0)
-    freezer_node = freezer_node(data_node(delayed=True))
+    freezer_node = freezer_node(data_node({"start_time":"2017-01-01","end_time":"2017-12-31"}))
 
 train_dataset = Dataset(
     label_list_file=label_list_file,
