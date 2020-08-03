@@ -163,19 +163,23 @@ class SeismicDataset(PytorchDataset):
         #        print(label_info)
 
         # print(indexers['time'])
-        data = self.get_data(indexers)
-
-        if self.transform is not None:
-            data = self.transform(data)
+        #data = self.get_data(indexers)
+        data = self.data
+        data = stuett.core.configuration(data, stuett.convenience.indexers_to_request(indexers))
+        data = data.compute()
 
         if "shape" not in self.__dict__:
             self.shape = data.shape
         elif data.shape != self.shape:
-            warnings.warn(f"Inconsistency in the data for item {indexers['time']}, its shape {data.shape} does not match shape {self.shape}")
-            padded_data = torch.zeros(self.shape)
-            pad = (0 ,abs(list(self.shape)[-1] - list(data.shape)[-1]))
-            padded_data = torch.nn.functional.pad(data,pad)
-            return padded_data, target
+            # warnings.warn(f"Inconsistency in the data for item {indexers['time']}, its shape {data.shape} does not match shape {self.shape}")
+            # padded_data = torch.zeros(self.shape)
+            # pad = (0 ,abs(list(self.shape)[-1] - list(data.shape)[-1]))
+            # data = torch.nn.functional.pad(data,pad)
+            return torch.zeros(self.shape), target
+
+        if self.transform is not None:
+            data = self.transform(data)
+
         return data, target
 
 class ImageDataset(PytorchDataset):

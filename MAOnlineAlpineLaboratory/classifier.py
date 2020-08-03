@@ -76,7 +76,7 @@ parser = argparse.ArgumentParser(description="Pytorch Neural Network Classificat
 parser.add_argument(
     "--classifier",
     type=str,
-    default="wind",
+    default="seismic",
     help="Classification type either 'seismic', 'image' or 'wind'",
 )
 parser.add_argument(
@@ -277,7 +277,7 @@ if not label_list_file.exists() and not args.reload_all:
 def load_seismic_source():
     seismic_channels = ["EHE", "EHN", "EHZ"]
     seismic_node = stuett.data.SeismicSource(
-        store=store, station="MH36", channel=seismic_channels, start_time="2017-01-01", end_time="2017-12-31"
+        store=store, station="MH36", channel=seismic_channels, start_time="2017-01-01", end_time="2017-01-02"
     )
     return seismic_node, len(seismic_channels)
 
@@ -305,7 +305,7 @@ elif args.classifier == "wind" or args.classifier == "seismic":
 bypass_freeze = not args.use_frozen
 
 if args.classifier == "image" or args.classifier == "seismic":
-    dataset_slice = {"time": slice("2017-01-01", "2017-12-31")}
+    dataset_slice = {"time": slice("2017-01-01", "2017-01-02")}
     batch_dims = {"time": stuett.to_timedelta(10, "minutes")}
 elif args.classifier == "wind":
     dataset_slice={"time": slice("2017-01-01", "2017-12-31")}
@@ -318,9 +318,10 @@ elif args.classifier == "wind":
 
 print("Setting up training dataset")
 
+freeze_store = stuett.DirectoryStore(tmp_dir.joinpath("frozen", "Freezer", "train"))
 if args.use_frozen:
-    freezer_node = Freezer(store=store, groupname="test", dim="time", offset=0)
-    freezer_node = freezer_node(data_node({"start_time":"2017-01-01","end_time":"2017-12-31"}))
+    freezer_node = Freezer(store=freeze_store, groupname="test", dim="time", offset=pd.to_timedelta("10 minutes"))
+    freezer_node = freezer_node(data_node(delayed=True), delayed=True)
 
 train_dataset = Dataset(
     label_list_file=label_list_file,
@@ -338,45 +339,44 @@ print("Using cached training data: ", args.use_frozen)
 #)
 #train_frozen.freeze(reload=args.reload_frozen)
 
-train_frozen = train_dataset
 
 print("Setting up test dataset")
-train_dataset = Dataset(
+test_dataset = Dataset(
     label_list_file=label_list_file,
     transform=transform,
     store=store,
     mode="test",
     label=label,
-    data=data_node,
+    data=freezer_node,
     dataset_slice=dataset_slice,
     batch_dims=batch_dims,
 )
 print("Using cached test data: ", args.use_frozen)
-test_frozen = DatasetFreezer(
-    train_dataset, path=tmp_dir.joinpath("frozen", "test"), bypass=bypass_freeze
-)
-test_frozen.freeze(reload=args.reload_frozen)
+# test_frozen = DatasetFreezer(
+#     train_dataset, path=tmp_dir.joinpath("frozen", "test"), bypass=bypass_freeze
+# )
+# test_frozen.freeze(reload=args.reload_frozen)
 
 # Set up pytorch data loaders
-shuffle = True
+shuffle = False
 train_sampler = None
 train_loader = DataLoader(
-    train_frozen,
+    train_dataset,
     batch_size=args.batch_size,
     shuffle=shuffle,
     sampler=train_sampler,
     # drop_last=True,
-    num_workers=1,
+    num_workers=0,
 )
 
 validation_sampler = None
 test_loader = DataLoader(
-    test_frozen,
+    test_dataset,
     batch_size=args.batch_size,
     shuffle=shuffle,
     sampler=validation_sampler,
     # drop_last=True,
-    num_workers=1,
+    num_workers=0,
 )
 
 def train(epoch, model, train_loader, writer):
