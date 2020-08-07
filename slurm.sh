@@ -24,6 +24,7 @@ echo SLURM_JOB_ID: $SLURM_JOB_ID
 cd /home/barthc/MasterThesis/permafrostanalytics
 #python -m pyinstrument -r text -o profile.o MAOnlineAlpineLaboratory/dataset_profiler.py -p /itet-stor/barthc/net_scratch/data --tmp_dir /itet-stor/barthc/net_scratch/user_dir/tmp --use_frozen
 python MAOnlineAlpineLaboratory/classifier.py -p /itet-stor/barthc/net_scratch/data --tmp_dir /itet-stor/barthc/net_scratch/user_dir/tmp --use_frozen
+#python MAOnlineAlpineLaboratory/classifier_dataset-freezer.py -p /itet-stor/barthc/net_scratch/data --tmp_dir /itet-stor/barthc/net_scratch/user_dir/tmp --use_frozen
 echo finished at: `date`
 exit 0;
 

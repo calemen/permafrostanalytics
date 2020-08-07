@@ -162,10 +162,13 @@ class SeismicDataset(PytorchDataset):
 
         #        print(label_info)
 
-        # print(indexers['time'])
+        print(indexers['time'])
         #data = self.get_data(indexers)
         data = self.data
+        request = stuett.convenience.indexers_to_request(indexers)
+        print("request: ", request)
         data = stuett.core.configuration(data, stuett.convenience.indexers_to_request(indexers))
+        data.visualize()
         data = data.compute()
 
         if "shape" not in self.__dict__:
