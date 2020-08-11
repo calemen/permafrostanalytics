@@ -305,7 +305,7 @@ elif args.classifier == "wind" or args.classifier == "seismic":
 bypass_freeze = not args.use_frozen
 
 if args.classifier == "image" or args.classifier == "seismic":
-    dataset_slice = {"time": slice("2017-01-01", "2017-12-31")}
+    dataset_slice = {"time": slice("2017-01-01", "2017-01-02")}
     batch_dims = {"time": stuett.to_timedelta(10, "minutes")}
 elif args.classifier == "wind":
     dataset_slice={"time": slice("2017-01-01", "2017-12-31")}

@@ -22,9 +22,20 @@ echo SLURM_JOB_ID: $SLURM_JOB_ID
 #
 # binary to execute
 cd /home/barthc/MasterThesis/permafrostanalytics
-#python -m pyinstrument -r text -o profile.o MAOnlineAlpineLaboratory/dataset_profiler.py -p /run/user/125202/gvfs/smb-share:server=whymper,share=permasense_vault_ro/ --tmp_dir /itet-stor/barthc/net_scratch/user_dir/tmp --use_frozen
-python MAOnlineAlpineLaboratory/classifier.py -p /run/user/125202/gvfs/smb-share:server=whymper,share=permasense_vault_ro/ --tmp_dir /itet-stor/barthc/net_scratch/user_dir/tmp --annotations_path /itet-stor/barthc/net_scratch/data/annotations/ --use_frozen
-#python MAOnlineAlpineLaboratory/classifier_dataset-freezer.py -p /run/user/125202/gvfs/smb-share:server=whymper,share=permasense_vault_ro/ --tmp_dir /itet-stor/barthc/net_scratch/user_dir/tmp --use_frozen
+
+#data from local
+#python -m pyinstrument -r text -o profile.o MAOnlineAlpineLaboratory/dataset_profiler.py -p /itet-stor/barthc/net_scratch/data/ --tmp_dir /itet-stor/barthc/net_scratch/user_dir/tmp --annotations_path /itet-stor/barthc/net_scratch/data/annotations/ --use_frozen
+#python MAOnlineAlpineLaboratory/classifier.py -p /itet-stor/barthc/net_scratch/data/ --tmp_dir /itet-stor/barthc/net_scratch/user_dir/tmp --annotations_path /itet-stor/barthc/net_scratch/data/annotations/ --use_frozen
+python MAOnlineAlpineLaboratory/classifier_dataset-freezer.py -p /itet-stor/barthc/net_scratch/data/ --tmp_dir /itet-stor/barthc/net_scratch/user_dir/tmp --annotations_path /itet-stor/barthc/net_scratch/data/annotations/ --use_frozen
+
+#data from Samba
+#python -m pyinstrument -r text -o profile.o MAOnlineAlpineLaboratory/dataset_profiler.py -p /run/user/125202/gvfs/smb-share:server=whymper,share=permasense_vault_ro/ --tmp_dir /itet-stor/barthc/net_scratch/user_dir/tmp --annotations_path /itet-stor/barthc/net_scratch/data/annotations/ --use_frozen
+#python MAOnlineAlpineLaboratory/classifier.py -p /run/user/125202/gvfs/smb-share:server=whymper,share=permasense_vault_ro/ --tmp_dir /itet-stor/barthc/net_scratch/user_dir/tmp --annotations_path /itet-stor/barthc/net_scratch/data/annotations/ --use_frozen
+#python MAOnlineAlpineLaboratory/classifier_dataset-freezer.py -p /run/user/125202/gvfs/smb-share:server=whymper,share=permasense_vault_ro/ --tmp_dir /itet-stor/barthc/net_scratch/user_dir/tmp --annotations_path /itet-stor/barthc/net_scratch/data/annotations/ --use_frozen
+
+#misc
+#python MAOnlineAlpineLaboratory/read_mseed.py
+
 echo finished at: `date`
 exit 0;
 

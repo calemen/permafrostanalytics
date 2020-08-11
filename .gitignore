@@ -70,3 +70,4 @@ data/*
 cache-directory/
 
 poetry.lock
+mydask.png

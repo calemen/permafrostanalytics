@@ -150,7 +150,7 @@ parser.add_argument(
 parser.add_argument(
     "--annotations_path",
     type=str,
-    default=str(Path(__file__).absolute().parent.joinpath("..", "data")),
+    default=str(Path(__file__).absolute().parent.joinpath("..", "data", "annotations")),
     help="The path to the folder containing the annotation data",
 )
 args = parser.parse_args()
@@ -161,13 +161,13 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print("device: ", device)
 data_path = Path(args.path)
 annotations_path = Path(args.annotations_path)
-label_filename = "annotations.csv"
+label_filename = "automatic_labels_mountaineers.csv" #"annotations.csv"
 tmp_dir = Path(args.tmp_dir)
 os.makedirs(tmp_dir, exist_ok=True)
 
 
 if args.classifier == "wind" or args.classifier == "seismic":
-    prefix = "geophones/binaries/4D/"
+    prefix = "seismic_data/4D/" #"geophones/binaries/4D/"
 elif args.classifier == "image":
     prefix="timelapse_images_fast"
 else:
@@ -203,10 +203,12 @@ if not args.local:
     )
 else:
     store = stuett.DirectoryStore(Path(data_path).joinpath(prefix))
+
     print(Path(data_path).joinpath(prefix))
+    
     if ("MH36/2017/EHE.D/4D.MH36.A.EHE.D.20170101_000000.miniseed" not in store):
         raise RuntimeError(f"Please provide a valid path to the permafrost {prefix} data or see README how to download it")
-    annotation_store = stuett.DirectoryStore(annotations_path) #stuett.DirectoryStore(Path(data_path).joinpath("annotations"))
+    annotation_store = stuett.DirectoryStore(annotations_path)
     if label_filename not in annotation_store:
         print(
             "WARNING: Please provide a valid path to the permafrost annotation data or see README how to download it"
@@ -222,7 +224,7 @@ def get_seismic_transform():
         return value_db
 
     spectrogram = stuett.data.Spectrogram(
-        nfft=512, stride=512, dim="time", sampling_rate=1000
+        nfft=512, stride=512, dim="time", sampling_rate=250
     )
 
     transform = transforms.Compose(
