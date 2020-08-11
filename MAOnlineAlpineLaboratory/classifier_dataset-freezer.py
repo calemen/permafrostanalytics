@@ -147,6 +147,12 @@ parser.add_argument(
     default=True,
     help="Only use local files and not data from Azure",
 )
+parser.add_argument(
+    "--annotations_path",
+    type=str,
+    default=str(Path(__file__).absolute().parent.joinpath("..", "data", "annotations")),
+    help="The path to the folder containing the annotation data",
+)
 args = parser.parse_args()
 
 ################## PARAMETERS ###################
@@ -154,7 +160,8 @@ args = parser.parse_args()
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print("device: ", device)
 data_path = Path(args.path)
-label_filename = "annotations.csv"
+annotations_path = Path(args.annotations_path)
+label_filename = "automatic_labels_mountaineers.csv" #"annotations.csv"
 tmp_dir = Path(args.tmp_dir)
 os.makedirs(tmp_dir, exist_ok=True)
 
@@ -198,7 +205,7 @@ else:
     store = stuett.DirectoryStore(Path(data_path).joinpath(prefix))
     if ("MH36/2017/EHE.D/4D.MH36.A.EHE.D.20170101_000000.miniseed" not in store):
         raise RuntimeError(f"Please provide a valid path to the permafrost {prefix} data or see README how to download it")
-    annotation_store = stuett.DirectoryStore(Path(data_path).joinpath("annotations"))
+    annotation_store = stuett.DirectoryStore(annotations_path)
     if label_filename not in annotation_store:
         print(
             "WARNING: Please provide a valid path to the permafrost annotation data or see README how to download it"

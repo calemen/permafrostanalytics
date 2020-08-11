@@ -171,6 +171,24 @@ class SeismicDataset(PytorchDataset):
         data = stuett.core.configuration(data, request)
         data = data.compute()
 
+        print(f"BEFORE: DATA.SHAPE {data.shape}")
+
+        #print(f"DATA: {data}")
+        #print("STARTTIME BEFORE: ", data.coords["starttime"].shape)
+        #TODO: fix xarray creation (dimension time in coordinate starttime with 900000 entries) and then remove this hack
+        # if(data.coords["starttime"].shape != (3,1)):
+        #     #print(data.coords["starttime"])
+        #     #print(data.coords["starttime"].coords)
+        #     #print(data.coords["starttime"].dims)
+        #     #print(data.coords["starttime"]["time"])
+        #     starttime_tmp = data.coords["starttime"][0]
+        #     #print("STARTTIME_TMP: ", starttime_tmp)
+        #     del starttime_tmp.coords["time"]
+        #     del data.coords["starttime"]
+        #     #print("STARTTIME_TMP: ", starttime_tmp)
+        #     data["starttime"] = starttime_tmp
+        #     print("STARTTIME AFTER: ", data.coords["starttime"].shape)
+
         if "shape" not in self.__dict__:
             self.shape = data.shape
         elif data.shape != self.shape:
@@ -179,26 +197,14 @@ class SeismicDataset(PytorchDataset):
             # pad = (0 ,abs(list(self.shape)[-1] - list(data.shape)[-1]))
             # data = torch.nn.functional.pad(data,pad)
             return torch.zeros(self.shape), target
-
-        print(f"DATA: {data}")
-        #print(f"SHAPE: {data.shape}")
-        #print("STARTTIME BEFORE: ", data.coords["starttime"].shape)
-        #TODO: fix xarray creation (dimension time in coordinate starttime with 900000 entries) and then remove this hack
-        if(data.coords["starttime"].shape != (3,1)):
-            #print(data.coords["starttime"])
-            #print(data.coords["starttime"].coords)
-            #print(data.coords["starttime"].dims)
-            #print(data.coords["starttime"]["time"])
-            starttime_tmp = data.coords["starttime"][0]
-            #print("STARTTIME_TMP: ", starttime_tmp)
-            del starttime_tmp.coords["time"]
-            del data.coords["starttime"]
-            #print("STARTTIME_TMP: ", starttime_tmp)
-            data["starttime"] = starttime_tmp
-            print("STARTTIME AFTER: ", data.coords["starttime"].shape)
+            #data = xr.zeros(data.shape)
 
         if self.transform is not None:
             data = self.transform(data)
+
+        #print(f"DATA: {data}")
+        print(f"SHAPE: {data.shape}")
+        print(f"SHAPE TARGET: {target.shape}")
 
         return data, target
 
