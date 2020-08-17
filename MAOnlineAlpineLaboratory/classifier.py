@@ -86,7 +86,7 @@ parser.add_argument(
     help="input batch size for training (default: 16)",
 )
 parser.add_argument(
-    "--epochs", type=int, default=500, help="number of epochs to train (default: 500)"
+    "--epochs", type=int, default=2, help="number of epochs to train (default: 500)"
 )
 parser.add_argument(
     "--lr", type=float, default=0.001, help="learning rate for optimizer"
@@ -94,7 +94,7 @@ parser.add_argument(
 parser.add_argument(
     "--linear_decrease_start_epoch",
     type=int,
-    default=100,
+    default=1,
     help="At which epoch to start the linear decrease",
 )
 parser.add_argument(
@@ -328,9 +328,9 @@ elif args.classifier == "wind":
 
 print("Setting up training dataset")
 
-freeze_store = stuett.DirectoryStore(tmp_dir.joinpath("frozen", "Freezer", "train"))
+freeze_store = stuett.DirectoryStore(tmp_dir.joinpath("frozen", "FreezerNode"))
 if args.use_frozen:
-    freezer_node = Freezer(store=freeze_store, groupname="test", dim="time", offset=pd.to_timedelta("10 minutes"))
+    freezer_node = Freezer(store=freeze_store, groupname="classifier", dim="time", offset=pd.to_timedelta("10 minutes"))
     freezer_node = freezer_node(data_node(delayed=True), delayed=True)
 
 train_dataset = Dataset(
@@ -370,13 +370,14 @@ print("Using cached test data: ", args.use_frozen)
 # Set up pytorch data loaders
 shuffle = False
 train_sampler = None
+num_workers = 0
 train_loader = DataLoader(
     train_dataset,
     batch_size=args.batch_size,
     shuffle=shuffle,
     sampler=train_sampler,
     # drop_last=True,
-    num_workers=0,
+    num_workers=num_workers,
 )
 
 validation_sampler = None
@@ -386,7 +387,7 @@ test_loader = DataLoader(
     shuffle=shuffle,
     sampler=validation_sampler,
     # drop_last=True,
-    num_workers=0,
+    num_workers=num_workers,
 )
 
 def train(epoch, model, train_loader, writer):
