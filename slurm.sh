@@ -13,7 +13,7 @@
 export TEMP="/itet-stor/barthc/net_scratch/tmp"
 export TMPDIR="/itet-stor/barthc/net_scratch/tmp"
 
-source conda activate permafrost
+#source conda activate permafrost
 #
 echo Running on host: `hostname`
 echo In directory: `pwd`
@@ -25,8 +25,11 @@ cd /home/barthc/MasterThesis/permafrostanalytics
 
 #data from local
 #python -m pyinstrument -r text -o profile.o MAOnlineAlpineLaboratory/dataset_profiler.py -p /itet-stor/barthc/net_scratch/data/ --tmp_dir /itet-stor/barthc/net_scratch/user_dir/tmp --annotations_path /itet-stor/barthc/net_scratch/data/annotations/ --use_frozen
-python MAOnlineAlpineLaboratory/classifier.py -p /itet-stor/barthc/net_scratch/data/ --tmp_dir /itet-stor/barthc/net_scratch/user_dir/tmp --annotations_path /itet-stor/barthc/net_scratch/data/annotations/ --use_frozen
+#python MAOnlineAlpineLaboratory/classifier.py -p /itet-stor/barthc/net_scratch/data/ --tmp_dir /itet-stor/barthc/net_scratch/user_dir/tmp --annotations_path /itet-stor/barthc/net_scratch/data/annotations/ --use_frozen
+#python -m pyinstrument -r text -o profile_classifier.o MAOnlineAlpineLaboratory/classifier.py -p /itet-stor/barthc/net_scratch/data/ --tmp_dir /itet-stor/barthc/net_scratch/user_dir/tmp --annotations_path /itet-stor/barthc/net_scratch/data/annotations/ --use_frozen
+#python -m pyinstrument -r text -o profile.o MAOnlineAlpineLaboratory/FreezerNode_evaluation.py -p /itet-stor/barthc/net_scratch/data/ --tmp_dir /itet-stor/barthc/net_scratch/user_dir/tmp --annotations_path /itet-stor/barthc/net_scratch/data/annotations/
 #python MAOnlineAlpineLaboratory/classifier_dataset-freezer.py -p /itet-stor/barthc/net_scratch/data/ --tmp_dir /itet-stor/barthc/net_scratch/user_dir/tmp --annotations_path /itet-stor/barthc/net_scratch/data/annotations/ --use_frozen
+python MAOnlineAlpineLaboratory/FreezerNode_evaluation.py -p /itet-stor/barthc/net_scratch/data/ --tmp_dir /itet-stor/barthc/net_scratch/user_dir/tmp --annotations_path /itet-stor/barthc/net_scratch/data/annotations/ --use_frozen
 
 #data from Samba
 #python -m pyinstrument -r text -o profile.o MAOnlineAlpineLaboratory/dataset_profiler.py -p /run/user/125202/gvfs/smb-share:server=whymper,share=permasense_vault_ro/ --tmp_dir /itet-stor/barthc/net_scratch/user_dir/tmp --annotations_path /itet-stor/barthc/net_scratch/data/annotations/ --use_frozen

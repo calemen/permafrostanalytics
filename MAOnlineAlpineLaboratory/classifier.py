@@ -40,6 +40,8 @@ import torch.optim as optim
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 
+import traceback
+import sys
 
 from plotly import tools
 from plotly.offline import download_plotlyjs, init_notebook_mode, plot, iplot
@@ -47,7 +49,7 @@ import plotly.graph_objs as go
 
 import stuett
 from stuett.global_config import get_setting, setting_exists, set_setting
-from stuett.data import Freezer
+from stuett.data import Freezer, Spectrogram, Rescale, To_db, To_Tensor
 
 import argparse
 import torch
@@ -154,6 +156,15 @@ parser.add_argument(
     help="The path to the folder containing the annotation data",
 )
 args = parser.parse_args()
+
+# class TracePrints(object):
+#   def __init__(self):    
+#     self.stdout = sys.stdout
+#   def write(self, s):
+#     self.stdout.write("Writing %r\n" % s)
+#     traceback.print_stack(file=self.stdout)
+
+# sys.stdout = TracePrints()
 
 ################## PARAMETERS ###################
 #################################################
@@ -287,7 +298,7 @@ if not label_list_file.exists() and not args.reload_all:
 def load_seismic_source():
     seismic_channels = ["EHE", "EHN", "EHZ"]
     seismic_node = stuett.data.SeismicSource(
-        store=store, station="MH36", channel=seismic_channels, start_time="2017-01-01", end_time="2017-01-02"
+        store=store, station="MH36", channel=seismic_channels, start_time="2017-01-01", end_time="2017-01-31"
     )
     return seismic_node, len(seismic_channels)
 
@@ -315,7 +326,7 @@ elif args.classifier == "wind" or args.classifier == "seismic":
 bypass_freeze = not args.use_frozen
 
 if args.classifier == "image" or args.classifier == "seismic":
-    dataset_slice = {"time": slice("2017-01-01", "2017-01-02")}
+    dataset_slice = {"time": slice("2017-01-01", "2017-01-31")}
     batch_dims = {"time": stuett.to_timedelta(10, "minutes")}
 elif args.classifier == "wind":
     dataset_slice={"time": slice("2017-01-01", "2017-12-31")}
@@ -329,17 +340,25 @@ elif args.classifier == "wind":
 print("Setting up training dataset")
 
 freeze_store = stuett.DirectoryStore(tmp_dir.joinpath("frozen", "FreezerNode"))
-if args.use_frozen:
-    freezer_node = Freezer(store=freeze_store, groupname="classifier", dim="time", offset=pd.to_timedelta("10 minutes"))
-    freezer_node = freezer_node(data_node(delayed=True), delayed=True)
+
+bypass_freeze = not args.use_frozen
+
+freezer_node = Freezer(store=freeze_store, groupname="classifier", dim="time", offset=pd.to_timedelta("10 minutes"), store_chunk_size=6, bypass_freeze=bypass_freeze)
+rescale_node = Rescale()
+spectogram_node = Spectrogram(nfft=512, stride=512, dim="time", sampling_rate=250)
+to_db_node = To_db()
+to_tensor_node = To_Tensor()
+data_node = to_tensor_node(freezer_node(to_db_node(spectogram_node(rescale_node(data_node(delayed=True), delayed=True), delayed=True), delayed=True), delayed=True), delayed=True)
+
+#data_node.visualize()
 
 train_dataset = Dataset(
     label_list_file=label_list_file,
-    transform=transform,
+    transform=None,
     store=store,
     mode="train",
     label=label,
-    data=freezer_node,
+    data=data_node,
     dataset_slice=dataset_slice,
     batch_dims=batch_dims,
 )
@@ -353,11 +372,11 @@ print("Using cached training data: ", args.use_frozen)
 print("Setting up test dataset")
 test_dataset = Dataset(
     label_list_file=label_list_file,
-    transform=transform,
+    transform=None,
     store=store,
     mode="test",
     label=label,
-    data=freezer_node,
+    data=data_node,
     dataset_slice=dataset_slice,
     batch_dims=batch_dims,
 )
@@ -368,9 +387,9 @@ print("Using cached test data: ", args.use_frozen)
 # test_frozen.freeze(reload=args.reload_frozen)
 
 # Set up pytorch data loaders
-shuffle = False
+shuffle = True
 train_sampler = None
-num_workers = 0
+num_workers = 4
 train_loader = DataLoader(
     train_dataset,
     batch_size=args.batch_size,
