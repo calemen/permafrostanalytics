@@ -169,6 +169,7 @@ class SeismicDataset(PytorchDataset):
         #request = {'start_time': np.datetime64('2017-02-18T00:00:00.000000000'), 'end_time': np.datetime64('2017-02-18T00:10:00.000000000')}
         #print("REQUEST: ", request)
         data = stuett.core.configuration(data, request)
+        #data.visualize("seismicdataset_before_compute_daskgraph.png")
         data = data.compute()
 
         #print(f"BEFORE: DATA.SHAPE {data.shape}")
@@ -180,11 +181,12 @@ class SeismicDataset(PytorchDataset):
             self.shape = data.shape
         elif data.shape != self.shape:
             warnings.warn(f"Inconsistency in the data for item {indexers['time']}, its shape {data.shape} does not match shape {self.shape}")
-            padded_data = torch.zeros(self.shape)
             pad = (0 ,abs(list(self.shape)[-1] - list(data.shape)[-1]))
+            #data = data.pad({"time": pad}, mode="symmetric")
             data = torch.nn.functional.pad(data,pad)
-            #return torch.zeros(self.shape), target
-            #data = xr.zeros(data.shape)
+            return data, target
+            #data = np.zeros(self.shape)
+            #data = xr.DataArray(data, dims=["stream_id", "seed_id", "time"])
         #print(f"DATA BEFORE: {data}")
         if self.transform is not None:
             data = self.transform(data)
