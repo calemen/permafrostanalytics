@@ -628,4 +628,4 @@ def update_output(date, session_id, user_id):
 
 
 if __name__ == "__main__":
-    app.run_server(debug=False)
+    app.run_server(debug=False, port=8000)

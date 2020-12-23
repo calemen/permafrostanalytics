@@ -21,7 +21,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE."""
 
 import stuett
-from stuett.data import annotations_to_slices
+from stuett.core.graph import StuettNode, configuration
+from stuett.convenience import indexers_to_request as i2r
+#from stuett.data import annotations_to_slices
 
 import warnings
 import sys, os
@@ -46,6 +48,30 @@ from pathlib import Path
 
 import xarray as xr
 
+from dask.delayed import Delayed
+
+def annotations_to_slices(annotations):
+    # build label slices
+    label_coords = []
+    start_identifier = "start_"
+    for coord in annotations.coords:
+        # print(coord)
+        if coord.startswith(start_identifier):
+            label_coord = coord[len(start_identifier) :]
+            if "end_" + label_coord in annotations.coords:
+                label_coords += [label_coord]
+
+    label_slices = []
+    for i in range(len(annotations)):  # TODO: see if we can still optimzied this
+        selector = {}
+        for coord in label_coords:
+            selector[coord] = slice(
+                annotations["start_" + coord].values[i],
+                annotations["end_" + coord].values[i],
+            )
+        label_slices.append(selector)
+
+    return label_coords, label_slices
 
 class PytorchDataset(stuett.data.SegmentedDataset):
     def __init__(
@@ -164,15 +190,29 @@ class SeismicDataset(PytorchDataset):
 
         #print(indexers['time'])
         #data = self.get_data(indexers)
-        data = self.data
-        request = stuett.convenience.indexers_to_request(indexers)
-        #request = {'start_time': np.datetime64('2017-02-18T00:00:00.000000000'), 'end_time': np.datetime64('2017-02-18T00:10:00.000000000')}
-        #print("REQUEST: ", request)
-        data = stuett.core.configuration(data, request)
-        #data.visualize("seismicdataset_before_compute_daskgraph.png")
-        data = data.compute()
-
-        #print(f"BEFORE: DATA.SHAPE {data.shape}")
+        transform = self.transform
+        #print(f"Transform: {transform}")
+        if transform is not None:
+            data = self.data
+            if isinstance(transform, transforms.Compose):
+                data = self.get_data(indexers)
+                data = transform(data)
+            elif isinstance(transform(""), Delayed):
+                if isinstance(data, StuettNode):
+                    data = transform(data(delayed=True))
+                else:
+                    data = transform(data)
+                request = i2r(indexers)
+                data = configuration(data, request)
+                data = data.compute()
+            else:
+                data = transform(data)
+        else:
+            request = stuett.convenience.indexers_to_request(indexers)
+            #print(f"request: {request}")
+            data = configuration(data, request)
+            #print(f"d: {d}")
+            data = data.compute()
 
         #print(f"DATA: {data}")
         #print("STARTTIME BEFORE: ", data.coords["starttime"].shape)
@@ -181,15 +221,17 @@ class SeismicDataset(PytorchDataset):
             self.shape = data.shape
         elif data.shape != self.shape:
             warnings.warn(f"Inconsistency in the data for item {indexers['time']}, its shape {data.shape} does not match shape {self.shape}")
-            pad = (0 ,abs(list(self.shape)[-1] - list(data.shape)[-1]))
-            #data = data.pad({"time": pad}, mode="symmetric")
-            data = torch.nn.functional.pad(data,pad)
-            return data, target
+            pad_value = list(self.shape)[-1] - list(data.shape)[-1]
+            if pad_value < 0: #if shape is bigger than expected then crop last dimension to match expected shape
+                data = data[:,:,:list(self.shape)[-1]]
+            else:
+                pad = (0 ,pad_value)
+                #data = data.pad({"time": pad}, mode="symmetric")
+                data = torch.nn.functional.pad(data,pad)
+            #return data, target
             #data = np.zeros(self.shape)
             #data = xr.DataArray(data, dims=["stream_id", "seed_id", "time"])
         #print(f"DATA BEFORE: {data}")
-        if self.transform is not None:
-            data = self.transform(data)
         #print(f"DATA After: {data.shape}")
         #print(f"DATA: {data}")
         #print(f"SHAPE: {data.shape}")
