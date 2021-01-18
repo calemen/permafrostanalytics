@@ -44,8 +44,22 @@ import plotly.graph_objs as go
 
 import stuett
 from stuett.global_config import get_setting, setting_exists, set_setting
-from stuett.data import Freezer, Spectrogram, Rescale, To_db, To_Tensor
-
+from stuett.data import (
+    SeismicSource,
+    DataCollector,
+    MinMaxDownsampling,
+    GSNDataSource,
+    LTTBDownsampling,
+    MHDSLRImages,
+    MHDSLRFilenames,
+    DirectoryStore,
+    Spectrogram,
+    Freezer,
+    Spectrogram,
+    Rescale,
+    To_db,
+    To_Tensor
+)
 import argparse
 
 from pathlib import Path
@@ -59,8 +73,12 @@ import os
 from skimage import io as imio
 import io, codecs
 import time
+import zipfile
 
 import csv
+
+import concurrent.futures
+import threading
 
 parser = argparse.ArgumentParser(description="Pytorch Neural Network Classification")
 parser.add_argument(
@@ -88,6 +106,12 @@ parser.add_argument(
     action="store_true",
     default=True,
     help="Only use local files and not data from Azure",
+)
+parser.add_argument(
+    "--copy_seismic_data",
+    action="store_true",
+    default=True,
+    help="Copy seismic raw data to local scratch before running and use this data as source. If folder seismic_data already exists it will not copy again",
 )
 args = parser.parse_args()
 
@@ -132,6 +156,34 @@ else:
     if ("MH36/2017/EHE.D/4D.MH36.A.EHE.D.20170101_000000.miniseed" not in store_seismic):
         raise RuntimeError(f"Please provide a valid path to the permafrost {prefix_seismic} data or see README how to download it")
 
+
+evaluation_starttime = dt.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+
+local_scratch_path = Path("/scratch/barthc/")
+local_scratch_path_tmp = local_scratch_path.joinpath(f"{evaluation_starttime}")
+local_scratch_data_path = local_scratch_path.joinpath("data")
+os.makedirs(local_scratch_data_path, exist_ok=True)
+if args.copy_seismic_data:
+    seismic_zip_name = "seismic_data.zip"
+    seismic_data_path = local_scratch_data_path.joinpath("seismic_data")
+    if not os.path.isfile(local_scratch_data_path.joinpath(seismic_zip_name)):
+        print("Copying zip file")
+        shutil.copy2(Path(data_path).joinpath(seismic_zip_name), local_scratch_data_path)
+    if not os.path.isdir(seismic_data_path):
+        print("Extracting zip file")
+        with zipfile.ZipFile(local_scratch_data_path.joinpath(seismic_zip_name), "r") as zip_file:
+            zip_file.extractall(seismic_data_path)
+    store_seismic = stuett.DirectoryStore(seismic_data_path.joinpath(prefix_seismic))
+    if ("MH36/2017/EHE.D/4D.MH36.A.EHE.D.20170101_000000.miniseed" not in store_seismic):
+            raise RuntimeError(f"Please provide a valid path to the permafrost {prefix_seismic} data or see README how to download it")
+freeze_store_path = local_scratch_path_tmp.joinpath("frozen", "FreezerNodeEvaluation")
+freeze_store = stuett.DirectoryStore(freeze_store_path)
+results_path = tmp_dir.joinpath("FreezerNode_evaluation")
+os.makedirs(results_path, exist_ok=True)
+synchronizer=zarr.ThreadSynchronizer()
+#synchronizer=zarr.ProcessSynchronizer(path=freeze_store_path)
+
+
 ###### Load the data source ##############
 #################################################
 def load_seismic_source():
@@ -147,107 +199,256 @@ def load_image_source():
     )
     return image_node
 
-
-evaluation_starttime = dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
-local_scratch_path = Path("/scratch/barthc/")
-local_scratch_path_tmp = local_scratch_path.joinpath(f"{evaluation_starttime}")
-freeze_store_path = local_scratch_path_tmp.joinpath("frozen", "FreezerNodeEvaluation")
-freeze_store = stuett.DirectoryStore(freeze_store_path)
-results_path = tmp_dir.joinpath("FreezerNode_evaluation")
-results = []
-results.append(["iteration","Data node","storing/loading","Calculation time formatted", "Calculation time raw"])
-os.makedirs(results_path, exist_ok=True)
-max_workers = 8
-num_iterations = 10
-synchronizer=zarr.ThreadSynchronizer()
-#synchronizer=zarr.ProcessSynchronizer(path=freeze_store_path)
-
 data_node_seismic = load_seismic_source()
 data_node_image = load_image_source()
+stride = 512
+spectogram_node = Spectrogram(nfft=512, stride=stride, dim="time", sampling_rate=250)
+
+def seismic_collector(): 
+    
+    return DataCollector(
+    data_paths = [
+        data_node_seismic(delayed=True)] + [
+                MinMaxDownsampling(rate=rate, dim="time")(
+                data=data_node_seismic(delayed=True), delayed=True
+        )
+        for rate in [4, 12, 450, 5000, 360000, 3600000]
+    ],
+    granularities=[
+        dt.timedelta(minutes=20),
+        dt.timedelta(minutes=40),
+        dt.timedelta(hours=2),
+        dt.timedelta(hours=16),
+        dt.timedelta(days=40),
+        dt.timedelta(days=332),
+        dt.timedelta(days=36500),
+    ],
+    )
+
+def seismic_collector_freezer(freezer_offset): 
+
+    synchronizer = zarr.ThreadSynchronizer()
+    
+    return DataCollector(
+    data_paths = [
+        data_node_seismic(delayed=True)] + [
+        Freezer(freeze_store,"seismic_sampling_rate_" + str(rate) ,"time",freezer_offset,synchronizer)(
+                MinMaxDownsampling(rate=rate, dim="time")(
+                data=data_node_seismic(delayed=True), delayed=True
+        ),delayed = True)
+        for rate in [4, 12, 450, 5000, 360000, 3600000]
+    ],
+    granularities=[
+        dt.timedelta(minutes=20),
+        dt.timedelta(minutes=40),
+        dt.timedelta(hours=2),
+        dt.timedelta(hours=16),
+        dt.timedelta(days=40),
+        dt.timedelta(days=332),
+        dt.timedelta(days=36500),
+    ],
+    )
+
+def spectogram_collector(): 
+    
+        return DataCollector(
+    data_paths = [
+        spectogram_node(data_node_seismic(delayed=True), delayed=True)] + [
+                MinMaxDownsampling(rate=rate, dim="time")(
+                data=spectogram_node(data_node_seismic(delayed=True), delayed=True), delayed=True
+        )
+        for rate in [int(15000/stride), int(150000/stride), int(9000000/stride), int(21600000/stride)]
+    ],
+    granularities=[
+        dt.timedelta(hours=3),
+        dt.timedelta(days=3),
+        dt.timedelta(days=30),
+        dt.timedelta(days=300),
+        dt.timedelta(days=36500),
+    ],
+    )
+
+def spectogram_collector_freezer(freezer_offset): 
+
+    synchronizer = zarr.ThreadSynchronizer()
+    
+    return DataCollector(
+    data_paths = [
+        spectogram_node(data_node_seismic(delayed=True), delayed=True)] + [
+        Freezer(freeze_store,"spectogram_sampling_rate_" + str(rate) ,"time",freezer_offset,synchronizer)(
+                MinMaxDownsampling(rate=rate, dim="time")(
+                data=spectogram_node(data_node_seismic(delayed=True), delayed=True), delayed=True
+        ),delayed = True)
+        for rate in [int(15000/stride), int(150000/stride), int(9000000/stride), int(21600000/stride)]
+    ],
+    granularities=[
+        dt.timedelta(hours=3),
+        dt.timedelta(days=3),
+        dt.timedelta(days=30),
+        dt.timedelta(days=300),
+        dt.timedelta(days=36500),
+    ],
+    )
 
 
-start_time = f"2017-03-01 00:00"
-end_time = f"2017-03-01 00:59"
-start_time = pd.to_datetime(start_time)
-end_time = pd.to_datetime(end_time)
+def processing(data_node, start_time, end_time, step):
+    print(f"node: {data_node}, start_time: {start_time}, end_time: {end_time}, step: {step}")
+    current_time = start_time
+    offset = stuett.to_timedelta(step)
+    off = offset - stuett.to_timedelta(f"4 ms")
+    while current_time <= end_time:
+        request = {"start_time": current_time, "end_time": current_time + off}
+        data = stuett.core.configuration(data_node, request)
+        data = dask.compute(data)
+        current_time = current_time + offset
+    return None
 
-request = {"start_time":start_time, "end_time":end_time}
 
-try:
-    for offset in [pd.to_timedelta("10 seconds"), pd.to_timedelta("1 minutes"), pd.to_timedelta("10 minutes"), pd.to_timedelta("30 minutes"), pd.to_timedelta("60 minutes")]:
-        freezer_node_seismic = Freezer(store=freeze_store, groupname="seismic", dim="time", offset=offset, synchronizer=synchronizer)
-        freezer_node_spectogram = Freezer(store=freeze_store, groupname="spectogram", dim="time", offset=offset, synchronizer=synchronizer)
-        spectogram_node = Spectrogram(nfft=512, stride=512, dim="time", sampling_rate=250)
+if __name__ == "__main__":
 
-        data_node_freezed_seismic = freezer_node_seismic(data_node_seismic(delayed=True), delayed=True)
-        data_node_freezed_spectogram = freezer_node_seismic(spectogram_node(data_node_seismic(delayed=True), delayed=True), delayed=True)
-        data_node_spectogram = spectogram_node(data_node_seismic(delayed=True), delayed=True)
-        for iteration in range(num_iterations):
-            #baseline raw
-            try:
-                shutil.rmtree(freeze_store_path)
-            except:
-                pass
-            for j in ["loading"]:
-                starttime = time.time()
-                data = data_node_seismic(request)
-                endtime = time.time()
-                time_tmp = endtime - starttime
-                time_tmp_formatted = time.strftime('%H:%M:%S', time.gmtime(time_tmp))
-                print(f"j: {j}, time: {time_tmp}")
-                results.append([iteration, "baseline raw", j, time_tmp_formatted, time_tmp])
-            #Freezer raw
-            try:
-                shutil.rmtree(freeze_store_path)
-            except:
-                pass
-            for j in ["storing", "loading"]:
-                starttime = time.time()
-                data = stuett.core.configuration(data_node_freezed_seismic, request)
-                data = dask.compute(data)
-                endtime = time.time()
-                time_tmp = endtime - starttime
-                time_tmp_formatted = time.strftime('%H:%M:%S', time.gmtime(time_tmp))
-                print(f"j: {j}, time: {time_tmp}")
-                results.append([iteration, "Freezer raw", j, time_tmp_formatted, time_tmp])
-            #baseline spectogram
-            try:
-                shutil.rmtree(freeze_store_path)
-            except:
-                pass
-            for j in ["loading"]:
-                starttime = time.time()
-                data = stuett.core.configuration(data_node_spectogram, request)
-                data = dask.compute(data)
-                endtime = time.time()
-                time_tmp = endtime - starttime
-                time_tmp_formatted = time.strftime('%H:%M:%S', time.gmtime(time_tmp))
-                print(f"j: {j}, time: {time_tmp}")
-                results.append([iteration, "baseline spectogram", j, time_tmp_formatted, time_tmp])
-            #Freezer spectogram
-            try:
-                shutil.rmtree(freeze_store_path)
-            except:
-                pass
-            for j in ["storing", "loading"]:
-                starttime = time.time()
-                data = stuett.core.configuration(data_node_freezed_spectogram, request)
-                data = dask.compute(data)
-                endtime = time.time()
-                time_tmp = endtime - starttime
-                time_tmp_formatted = time.strftime('%H:%M:%S', time.gmtime(time_tmp))
-                print(f"j: {j}, time: {time_tmp}")
-                results.append([iteration, "Freezer spectogram", j, time_tmp_formatted, time_tmp])
-except Exception as e:
-    import traceback
-    print(traceback.format_exc())
+    start_time = f"2017-03-01 00:00"
+    end_time = f"2017-07-01 00:00"
+    start_time = pd.to_datetime(start_time)
+    end_time = pd.to_datetime(end_time)
 
-with open(results_path.joinpath(f"{evaluation_starttime}_results_data_loading.csv"),"w") as f:
-    wr = csv.writer(f, quoting=csv.QUOTE_NONNUMERIC,delimiter=",")
-    wr.writerow(results)
+    max_workers = 0
+    min_workers = 0
+    num_iterations = 1
+    max_hours = 10000
+    hours_log_smallstep = range(1,10)
+    hours_log_bigstep = [10, 100]#1,10,100,
+    results = []
+    results.append(["iteration","Data node","storing/loading","num_workers","Freezer offset","Calculation time formatted", "Calculation time raw"])
 
-try:
-    shutil.rmtree(local_scratch_path_tmp)
-except:
-    pass
+    request = {"start_time":start_time, "end_time":end_time}
+    #dask.config.set(scheduler='single-threaded')
+
+    try: 
+        for bigstep in hours_log_bigstep:
+            for smallstep in hours_log_smallstep:
+                hours = bigstep * smallstep
+                if bigstep == 1:
+                    step = 1
+                elif hours >= 800:
+                    step = 50
+                else:
+                    step = 10
+                for offset in [pd.to_timedelta("60 minutes")]:
+                    data_collector_seismic = seismic_collector()
+                    data_collector_seismic_freezer = seismic_collector_freezer(offset)
+                    data_spectogram_collector = spectogram_collector()
+                    data_spectogram_collector_freezer = spectogram_collector_freezer(offset)
+                    start_time_tmp = stuett.to_datetime(start_time)
+                    end_time_tmp = stuett.to_datetime(start_time) + stuett.to_timedelta(f"{hours} hours")
+                    request = {"start_time":start_time_tmp, "end_time":end_time_tmp}
+                    data_node_raw = data_collector_seismic(request)
+                    data_node_raw_frozen = data_collector_seismic_freezer(request)
+                    data_node_spectogram = data_spectogram_collector(request)
+                    data_node_freezed_spectogram = data_spectogram_collector_freezer(request)
+
+                    for iteration in range(num_iterations):
+                        for num_workers in range(min_workers, max_workers+1):
+                            #baseline raw
+                            for j in ["loading"]:
+                                starttime = time.time()
+                                if num_workers == 0:
+                                    for i in range(0, hours, step):
+                                        start_time_tmp = stuett.to_datetime(start_time) + stuett.to_timedelta(f"{i} hours")
+                                        end_time_tmp = stuett.to_datetime(start_time) + stuett.to_timedelta(f"{i + step} hours") - stuett.to_timedelta(f"4 ms")
+                                        request = {"start_time":start_time_tmp, "end_time":end_time_tmp}
+                                        data_raw = stuett.core.configuration(data_node_raw, request)
+                                        data_raw = dask.compute(data_raw)
+                                else:
+                                    offsets_count = int(np.ceil(hours/step))
+                                    workers_slice = int(np.floor(offsets_count/num_workers))
+                                    for x in range(num_workers):
+                                        start_time_tmp = stuett.to_datetime(start_time) + stuett.to_timedelta(f"{x * workers_slice * step} hours")
+                                        end_time_tmp = stuett.to_datetime(start_time) + stuett.to_timedelta(f"{max((x + 1) * workers_slice * step, hours)} hours") - stuett.to_timedelta(f"4 ms")
+                                        request = {"start_time":start_time_tmp, "end_time":end_time_tmp}
+                                        threads = [threading.Thread(target=processing, args=(data_node_raw, start_time_tmp, end_time_tmp, step))]
+
+                                    for t in threads:
+                                        t.start()
+                                    for t in threads:
+                                        t.join()
+                                endtime = time.time()
+                                time_tmp = endtime - starttime
+                                time_tmp_formatted = time.strftime('%H:%M:%S', time.gmtime(time_tmp))
+                                print(f"baseline raw {j}: hours: {hours}, time: {time_tmp}")#, shape: {data_raw[0].shape}")
+                                results.append([hours, "baseline raw", j, num_workers, offset, time_tmp_formatted, time_tmp])
+                            #Freezer raw
+                            try:
+                                shutil.rmtree(freeze_store_path)
+                            except:
+                                pass
+                            for j in ["storing", "loading"]:
+                                starttime = time.time()
+                                if j == "storing":
+                                    for i in range(0, hours, step):
+                                        start_time_tmp = stuett.to_datetime(start_time) + stuett.to_timedelta(f"{i} hours")
+                                        end_time_tmp = stuett.to_datetime(start_time) + stuett.to_timedelta(f"{i + step} hours") - stuett.to_timedelta(f"4 ms")
+                                        request = {"start_time":start_time_tmp, "end_time":end_time_tmp}
+                                        data_raw_frozen = stuett.core.configuration(data_node_raw_frozen, request)
+                                        data_raw_frozen = dask.compute(data_raw_frozen)
+                                else:
+                                    start_time_tmp = stuett.to_datetime(start_time)
+                                    end_time_tmp = stuett.to_datetime(start_time) + stuett.to_timedelta(f"{hours} hours") - stuett.to_timedelta(f"4 ms")
+                                    request = {"start_time":start_time_tmp, "end_time":end_time_tmp}
+                                    data_raw_frozen = stuett.core.configuration(data_node_raw_frozen, request)
+                                    data_raw_frozen = dask.compute(data_raw_frozen)
+                                endtime = time.time()
+                                time_tmp = endtime - starttime
+                                time_tmp_formatted = time.strftime('%H:%M:%S', time.gmtime(time_tmp))
+                                print(f"Freezer raw {j}: hours: {hours}, time: {time_tmp}, shape: {data_raw_frozen[0].shape}")
+                                results.append([hours, "Freezer raw", j, offset, time_tmp_formatted, time_tmp])
+                            #baseline spectogram
+                            for j in ["loading"]:
+                                starttime = time.time()
+                                for i in range(0, hours, step):
+                                    start_time_tmp = stuett.to_datetime(start_time) + stuett.to_timedelta(f"{i} hours")
+                                    end_time_tmp = stuett.to_datetime(start_time) + stuett.to_timedelta(f"{i + step} hours") - stuett.to_timedelta(f"4 ms")
+                                    request = {"start_time":start_time_tmp, "end_time":end_time_tmp}
+                                    data_spectogram = stuett.core.configuration(data_node_spectogram, request)
+                                    data_spectogram = dask.compute(data_spectogram)
+                                endtime = time.time()
+                                time_tmp = endtime - starttime
+                                time_tmp_formatted = time.strftime('%H:%M:%S', time.gmtime(time_tmp))
+                                print(f"Baseline spectogram {j}: hours: {hours}, time: {time_tmp}, shape: {data_spectogram[0].shape}")
+                                results.append([hours, "Baseline spectogram", j, offset, time_tmp_formatted, time_tmp])
+                            #Freezer spectogram
+                            try:
+                                shutil.rmtree(freeze_store_path)
+                            except:
+                                pass
+                            for j in ["storing", "loading"]:
+                                starttime = time.time()
+                                if j == "storing":
+                                    for i in range(0, hours, step):
+                                        start_time_tmp = stuett.to_datetime(start_time) + stuett.to_timedelta(f"{i} hours")
+                                        end_time_tmp = stuett.to_datetime(start_time) + stuett.to_timedelta(f"{i + step} hours") - stuett.to_timedelta(f"4 ms")
+                                        request = {"start_time":start_time_tmp, "end_time":end_time_tmp}
+                                        data_spectogram_frozen = stuett.core.configuration(data_node_freezed_spectogram, request)
+                                        data_spectogram_frozen = dask.compute(data_spectogram_frozen)
+                                else:
+                                    start_time_tmp = stuett.to_datetime(start_time)
+                                    end_time_tmp = stuett.to_datetime(start_time) + stuett.to_timedelta(f"{hours} hours") - stuett.to_timedelta(f"4 ms")
+                                    request = {"start_time":start_time_tmp, "end_time":end_time_tmp}
+                                    data_spectogram_frozen = stuett.core.configuration(data_node_freezed_spectogram, request)
+                                    data_spectogram_frozen = dask.compute(data_spectogram_frozen)
+                                endtime = time.time()
+                                time_tmp = endtime - starttime
+                                time_tmp_formatted = time.strftime('%H:%M:%S', time.gmtime(time_tmp))
+                                print(f"Freezer spectogram {j}: hours: {hours}, time: {time_tmp}, shape: {data_spectogram_frozen[0].shape}")
+                                results.append([hours, "Freezer spectogram", j, offset, time_tmp_formatted, time_tmp])
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())
+
+    with open(results_path.joinpath(f"{evaluation_starttime}_results_data_loading.csv"),"w") as f:
+        wr = csv.writer(f, quoting=csv.QUOTE_NONNUMERIC,delimiter=",", lineterminator='\n')
+        wr.writerow(results)
+    print(f"Resultsfile written: {evaluation_starttime}_results_data_loading.csv")
+    try:
+        shutil.rmtree(local_scratch_path_tmp)
+    except:
+        pass

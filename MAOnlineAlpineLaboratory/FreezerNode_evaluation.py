@@ -43,6 +43,7 @@ from torch.utils.tensorboard import SummaryWriter
 import traceback
 import sys
 import shutil
+import dask
 
 from plotly import tools
 from plotly.offline import download_plotlyjs, init_notebook_mode, plot, iplot
@@ -164,6 +165,12 @@ parser.add_argument(
     default=False,
     help="Inital hackathon virtual environment is used",
 )
+parser.add_argument(
+    "--copy_seismic_data",
+    action="store_true",
+    default=True,
+    help="Copy seismic raw data to local scratch before running and use this data as source. If folder seismic_data already exists it will not copy again",
+)
 args = parser.parse_args()
 
 ################## PARAMETERS ###################
@@ -179,6 +186,7 @@ os.makedirs(tmp_dir, exist_ok=True)
 
 if args.classifier == "wind" or args.classifier == "seismic":
     prefix = "seismic_data/4D/" #"geophones/binaries/4D/"
+    prefix_seismic = "seismic_data/4D/"
 elif args.classifier == "image":
     prefix="timelapse_images_fast"
 else:
@@ -402,25 +410,45 @@ elif args.classifier == "wind":
 # seismic_data = seismic_data_node()
 # print(seismic_data)
 
-evaluation_starttime = dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+evaluation_starttime = dt.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 
 local_scratch_path = Path("/scratch/barthc/")
 local_scratch_path_tmp = local_scratch_path.joinpath(f"{evaluation_starttime}")
+local_scratch_data_path = local_scratch_path.joinpath("data")
+os.makedirs(local_scratch_data_path, exist_ok=True)
+if args.copy_seismic_data:
+    seismic_zip_name = "seismic_data.zip"
+    seismic_data_path = local_scratch_data_path.joinpath("seismic_data")
+    if not os.path.isfile(local_scratch_data_path.joinpath(seismic_zip_name)):
+        print("Copying zip file")
+        shutil.copy2(Path(data_path).joinpath(seismic_zip_name), local_scratch_data_path)
+    if not os.path.isdir(seismic_data_path):
+        print("Extracting zip file")
+        with zipfile.ZipFile(local_scratch_data_path.joinpath(seismic_zip_name), "r") as zip_file:
+            zip_file.extractall(seismic_data_path)
+    store_seismic = stuett.DirectoryStore(seismic_data_path.joinpath(prefix_seismic))
+    if ("MH36/2017/EHE.D/4D.MH36.A.EHE.D.20170101_000000.miniseed" not in store_seismic):
+            raise RuntimeError(f"Please provide a valid path to the permafrost {prefix_seismic} data or see README how to download it")
 freeze_store_path = local_scratch_path_tmp.joinpath("frozen", "FreezerNodeEvaluation")
-dataset_freezer_path = local_scratch_path_tmp.joinpath("frozen", "train_dataset_freezer")
 freeze_store = stuett.DirectoryStore(freeze_store_path)
 results_path = tmp_dir.joinpath("FreezerNode_evaluation")
-results = []
-results.append(["iteration","Freeze class","num_workers","use_frozen","storing/loading","Calculation time formatted", "Calculation time raw"])
 os.makedirs(results_path, exist_ok=True)
-max_workers = 0
-num_iterations = 10
 chunk_size = 1
 #synchronizer=zarr.ThreadSynchronizer()
 synchronizer=zarr.ProcessSynchronizer(path=freeze_store_path)
 
+label_list_file = None
+
+max_workers = 4
+min_workers = 4
+num_iterations = 10
+results = []
+results.append(["iteration","Data node","num_workers", "use_frozen", "storing/loading","Calculation time formatted", "Calculation time raw"])
+
+dask.config.set(scheduler='single-threaded')
+
 try:
-    for num_workers in range(0,max_workers+1):
+    for num_workers in range(min_workers,max_workers+1):
         for use_frozen in [True]:
             bypass_freeze = not use_frozen
 
@@ -428,7 +456,7 @@ try:
             if args.initial_env:
                 freezer_node = Freezer(store=freeze_store, groupname="classifier", dim="time", offset=pd.to_timedelta("60 minutes"))
             else:
-                freezer_node = Freezer(store=freeze_store, groupname="classifier", dim="time", offset=pd.to_timedelta("60 minutes"), synchronizer=synchronizer, store_chunk_size=chunk_size, bypass_freeze=bypass_freeze)
+                freezer_node = Freezer(store=freeze_store, groupname="classifier", dim="time", offset=pd.to_timedelta("60 minutes"), synchronizer=synchronizer, bypass_freeze=bypass_freeze)
             rescale_node = Rescale()
             spectogram_node = Spectrogram(nfft=512, stride=512, dim="time", sampling_rate=250)
             to_db_node = To_db()
@@ -491,48 +519,44 @@ try:
                     #         total_size += os.path.getsize(os.path.join(root, f))
                     # total_size = total_size / 1024
                     print(f"j: {j}, time: {time_tmp_formatted}")
-                    results.append([iteration, "FreezerNode_initial", num_workers, use_frozen, j, time_tmp_formatted, time_tmp])
+                    results.append([iteration, "FreezerNode", num_workers, use_frozen, j, time_tmp_formatted, time_tmp])
             
             # try:
 
-            for iteration in range(num_iterations):
-                try:
-                    shutil.rmtree(dataset_freezer_path)
-                except:
-                    pass
-                for j in ["storing", "loading"]:
-                    starttime = time.time()
-                    train_frozen = DatasetFreezer(
-                    train_dataset_raw, path=dataset_freezer_path, bypass=bypass_freeze
-                    )
-                    train_frozen.freeze(reload=False)
+            # for iteration in range(num_iterations):
+            #     try:
+            #         shutil.rmtree(dataset_freezer_path)
+            #     except:
+            #         pass
+            #     for j in ["storing", "loading"]:
+            #         starttime = time.time()
+            #         train_frozen = DatasetFreezer(
+            #         train_dataset_raw, path=dataset_freezer_path, bypass=bypass_freeze
+            #         )
+            #         train_frozen.freeze(reload=False)
 
-                    train_loader_datasetfreezer = DataLoader(
-                        train_frozen,
-                        batch_size=args.batch_size,
-                        shuffle=shuffle,
-                        sampler=train_sampler,
-                        # drop_last=True,
-                        num_workers=num_workers,
-                    )
-                    for i, data in enumerate(tqdm(train_loader_datasetfreezer), 0):
-                        pass
-                    endtime = time.time()
-                    time_tmp = endtime - starttime
-                    time_tmp_formatted = time.strftime('%H:%M:%S', time.gmtime(time_tmp))
-                    # total_size = 0
-                    # for root, dirs, files in os.walk(dataset_freezer_path):
-                    #     #print(f"root: {root}, dirs: {dirs}, files: {files}")
-                    #     for f in files:
-                    #         total_size += os.path.getsize(os.path.join(root, f))
-                    # total_size = total_size / 1024
-                    print(f"j: {j}, time: {time_tmp_formatted}")
-                    results.append([iteration, "DatasetFreezer_initial", num_workers, use_frozen, j, time_tmp_formatted, time_tmp])
-            for iteration in range(num_iterations):
-                for j in ["no freezer"]:
-                    starttime = time.time()
-
-                    train_loader_raw = DataLoader(
+            #         train_loader_datasetfreezer = DataLoader(
+            #             train_frozen,
+            #             batch_size=args.batch_size,
+            #             shuffle=shuffle,
+            #             sampler=train_sampler,
+            #             # drop_last=True,
+            #             num_workers=num_workers,
+            #         )
+            #         for i, data in enumerate(tqdm(train_loader_datasetfreezer), 0):
+            #             pass
+            #         endtime = time.time()
+            #         time_tmp = endtime - starttime
+            #         time_tmp_formatted = time.strftime('%H:%M:%S', time.gmtime(time_tmp))
+            #         # total_size = 0
+            #         # for root, dirs, files in os.walk(dataset_freezer_path):
+            #         #     #print(f"root: {root}, dirs: {dirs}, files: {files}")
+            #         #     for f in files:
+            #         #         total_size += os.path.getsize(os.path.join(root, f))
+            #         # total_size = total_size / 1024
+            #         print(f"j: {j}, time: {time_tmp_formatted}")
+            #         results.append([iteration, "DatasetFreezer", num_workers, use_frozen, j, time_tmp_formatted, time_tmp])
+            train_loader_raw = DataLoader(
                         train_dataset_raw,
                         batch_size=args.batch_size,
                         shuffle=shuffle,
@@ -540,6 +564,10 @@ try:
                         # drop_last=True,
                         num_workers=num_workers,
                     )
+            for iteration in range(num_iterations):
+                for j in ["loading"]:
+                    starttime = time.time()
+
                     for i, data in enumerate(tqdm(train_loader_raw), 0):
                         pass
                     endtime = time.time()
@@ -552,15 +580,15 @@ try:
                     #         total_size += os.path.getsize(os.path.join(root, f))
                     # total_size = total_size / 1024
                     print(f"j: {j}, time: {time_tmp_formatted}")
-                    results.append([iteration, "Baseline_initial", num_workers, use_frozen, j, time_tmp_formatted, time_tmp])
+                    results.append([iteration, "Baseline", num_workers, use_frozen, j, time_tmp_formatted, time_tmp])
 except Exception as e:
     import traceback
     print(traceback.format_exc())
 
-with open(results_path.joinpath(f"{evaluation_starttime}_results_initial.csv"),"w") as f:
-    wr = csv.writer(f, quoting=csv.QUOTE_NONNUMERIC,delimiter=",")
+with open(results_path.joinpath(f"{evaluation_starttime}_results.csv"),"w") as f:
+    wr = csv.writer(f, quoting=csv.QUOTE_NONNUMERIC,delimiter=",", lineterminator='\n')
     wr.writerow(results)
-
+print(f"Resultsfile written: {evaluation_starttime}_results.csv")
 try:
     shutil.rmtree(local_scratch_path_tmp)
 except:
